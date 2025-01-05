@@ -77,14 +77,26 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None):
+    def forward(self,
+                x,
+                emb,
+                context=None,
+                self_attn_q_injected=None,
+                self_attn_k_injected=None,
+                out_layers_injected=None):
         for layer in self:
-            if isinstance(layer, TimestepBlock):
+            if isinstance(layer, ResBlock):
+                x = layer(x, emb, out_layers_injected=out_layers_injected)
+            elif isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
             elif isinstance(layer, SpatialTransformer):
-                x = layer(x, context)
+                x = layer(x,
+                          context,
+                          self_attn_q_injected,
+                          self_attn_k_injected)
             else:
                 x = layer(x)
+        self.stored_output = x
         return x
 
 
@@ -240,7 +252,10 @@ class ResBlock(TimestepBlock):
         else:
             self.skip_connection = conv_nd(dims, channels, self.out_channels, 1)
 
-    def forward(self, x, emb):
+        self.in_layers_features = None
+        self.out_layers_features = None
+
+    def forward(self, x, emb, out_layers_injected=None):
         """
         Apply the block to a Tensor, conditioned on a timestep embedding.
         :param x: an [N x C x ...] Tensor of features.
@@ -248,11 +263,11 @@ class ResBlock(TimestepBlock):
         :return: an [N x C x ...] Tensor of outputs.
         """
         return checkpoint(
-            self._forward, (x, emb), self.parameters(), self.use_checkpoint
+            self._forward, (x, emb, out_layers_injected), self.parameters(), self.use_checkpoint
         )
 
 
-    def _forward(self, x, emb):
+    def _forward(self, x, emb, out_layers_injected=None):
         if self.updown:
             in_rest, in_conv = self.in_layers[:-1], self.in_layers[-1]
             h = in_rest(x)
@@ -261,6 +276,7 @@ class ResBlock(TimestepBlock):
             h = in_conv(h)
         else:
             h = self.in_layers(x)
+            self.in_layers_features = h
         emb_out = self.emb_layers(emb).type(h.dtype)
         while len(emb_out.shape) < len(h.shape):
             emb_out = emb_out[..., None]
@@ -270,8 +286,14 @@ class ResBlock(TimestepBlock):
             h = out_norm(h) * (1 + scale) + shift
             h = out_rest(h)
         else:
-            h = h + emb_out
-            h = self.out_layers(h)
+            if out_layers_injected is not None:
+                out_layers_injected_uncond, out_layers_injected_cond = out_layers_injected.chunk(2)
+                b = x.shape[0] // 2
+                h = th.cat([out_layers_injected_uncond]*b + [out_layers_injected_cond]*b)
+            else:
+                h = h + emb_out
+                h = self.out_layers(h)
+            self.out_layers_features = h
         return self.skip_connection(x) + h
 
 
@@ -707,7 +729,13 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
-    def forward(self, x, timesteps=None, context=None, y=None,**kwargs):
+    def forward(self,
+                x,
+                timesteps=None,
+                context=None,
+                y=None,
+                injected_features=None,
+                **kwargs):
         """
         Apply the model to an input batch.
         :param x: an [N x C x ...] Tensor of inputs.
@@ -731,10 +759,36 @@ class UNetModel(nn.Module):
         for module in self.input_blocks:
             h = module(h, emb, context)
             hs.append(h)
+
         h = self.middle_block(h, emb, context)
+
+        module_i = 0
         for module in self.output_blocks:
+            self_attn_q_injected = None
+            self_attn_k_injected = None
+            out_layers_injected = None
+            q_feature_key = f'output_block_{module_i}_self_attn_q'
+            k_feature_key = f'output_block_{module_i}_self_attn_k'
+            out_layers_feature_key = f'output_block_{module_i}_out_layers'
+
+            if injected_features is not None and q_feature_key in injected_features:
+                self_attn_q_injected = injected_features[q_feature_key]
+
+            if injected_features is not None and k_feature_key in injected_features:
+                self_attn_k_injected = injected_features[k_feature_key]
+
+            if injected_features is not None and out_layers_feature_key in injected_features:
+                out_layers_injected = injected_features[out_layers_feature_key]
+
             h = th.cat([h, hs.pop()], dim=1)
-            h = module(h, emb, context)
+            h = module(h,
+                       emb,
+                       context,
+                       self_attn_q_injected=self_attn_q_injected,
+                       self_attn_k_injected=self_attn_k_injected,
+                       out_layers_injected=out_layers_injected)
+            module_i += 1
+
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
             return self.id_predictor(h)

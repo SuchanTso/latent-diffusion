@@ -10,6 +10,7 @@ from torchvision import transforms
 
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.util import instantiate_from_config
+import tqdm
 
 rescale = lambda x: (x + 1.) / 2.
 
@@ -106,8 +107,20 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
                                          make_prog_row=True)
         else:
             print(f"make ddim process")
+            assert exp_config.config.prompt is not None
+            prompts = [exp_config.config.prompt]
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            file_path = "/data/usr/zsc/project/feature_decompose_diffusion/datasets/lsun_bedroom/00000089629ce3ba87bae003073896ba01988dee.jpg"
+            assert os.path.isfile(file_path)
+            init_image = load_img(file_path).to(device)
+            init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))
+            ddim_inversion_steps = 999
+            sampler = DDIMSampler(model)
+            z_enc, _ = sampler.encode_ddim(init_latent,conditioning=None, num_steps=ddim_inversion_steps)
+
+
             sample, intermediates = convsample_ddim(model,  steps=custom_steps, shape=shape,
-                                                    eta=eta)
+                                                    eta=eta , xT=z_enc)
 
         t1 = time.time()
 
@@ -128,20 +141,23 @@ def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None
 
     tstart = time.time()
     n_saved = len(glob.glob(os.path.join(logdir,'*.png')))-1
+    unet_model = model.model.diffusion_model
+
     # path = logdir
-    if model.cond_stage_model is None:
+    print(model.cond_stage_model)
+    if model.cond_stage_model is not None:
         all_images = []
 
         print(f"Running unconditional sampling for {n_samples} samples")
-        for _ in trange(n_samples // batch_size, desc="Sampling Batches (unconditional)"):
-            logs = make_convolutional_sample(model, batch_size=batch_size,
-                                             vanilla=vanilla, custom_steps=custom_steps,
-                                             eta=eta)
-            n_saved = save_logs(logs, logdir, n_saved=n_saved, key="sample")
-            all_images.extend([custom_to_np(logs["sample"])])
-            if n_saved >= n_samples:
-                print(f'Finish after generating {n_saved} samples')
-                break
+        # for _ in trange(n_samples // batch_size, desc="Sampling Batches (unconditional)"):
+        logs = make_convolutional_sample(model, batch_size=batch_size,
+                                            vanilla=vanilla, custom_steps=custom_steps,
+                                            eta=eta)
+        n_saved = save_logs(logs, logdir, n_saved=n_saved, key="sample")
+        all_images.extend([custom_to_np(logs["sample"])])
+        if n_saved >= n_samples:
+            print(f'Finish after generating {n_saved} samples')
+                # break
         all_img = np.concatenate(all_images, axis=0)
         all_img = all_img[:n_samples]
         shape_str = "x".join([str(x) for x in all_img.shape])
@@ -171,6 +187,22 @@ def save_logs(logs, path, n_saved=0, key="sample", np_path=None):
                 np.savez(nppath, npbatch)
                 n_saved += npbatch.shape[0]
     return n_saved
+
+def block_enumerate(blocks):
+    for block in tqdm(blocks, desc="Saving input blocks feature maps"):
+            if block_idx < 4:
+                block_idx += 1
+                continue
+            if "ResBlock" in str(type(block[0])):
+                if block_idx == 4:
+                    print(type(block[0]))
+                    # save_feature_map(block[0].in_layers_features, f"{feature_type}_{block_idx}_in_layers_features_time_{i}")
+                    # save_feature_map(block[0].out_layers_features, f"{feature_type}_{block_idx}_out_layers_features_time_{i}")
+            if len(block) > 1 and "SpatialTransformer" in str(type(block[1])):
+                print(type(block[1]))
+                # save_feature_map(block[1].transformer_blocks[0].attn1.k, f"{feature_type}_{block_idx}_self_attn_k_time_{i}")
+                # save_feature_map(block[1].transformer_blocks[0].attn1.q, f"{feature_type}_{block_idx}_self_attn_q_time_{i}")
+            block_idx += 1
 
 
 def get_parser():
@@ -242,7 +274,7 @@ def load_model_from_config(config, sd):
 def load_model(config, ckpt, gpu, eval_mode):
     if ckpt:
         print(f"Loading model from {ckpt}")
-        pl_sd = torch.load(ckpt, map_location="cpu")
+        pl_sd = torch.load(ckpt, map_location="cpu" ,weights_only=False)
         global_step = pl_sd["global_step"]
     else:
         pl_sd = {"state_dict": None}
@@ -319,9 +351,14 @@ if __name__ == "__main__":
         yaml.dump(sampling_conf, f, default_flow_style=False)
     print(sampling_conf)
 
+    # print(model.model.diffusion_model)
+
+    # block_enumerate(model.model.diffusion_model.output_blocks)
 
     run(model, imglogdir, eta=opt.eta,
         vanilla=opt.vanilla_sample,  n_samples=opt.n_samples, custom_steps=opt.custom_steps,
         batch_size=opt.batch_size, nplog=numpylogdir)
 
     print("done.")
+
+
