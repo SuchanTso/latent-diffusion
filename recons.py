@@ -85,7 +85,8 @@ def convsample_ddim(model, steps, shape, eta=1.0 , xT = None
     ddim = DDIMSampler(model)
     bs = shape[0]
     shape = shape[1:]
-    samples, intermediates = ddim.sample(steps, batch_size=bs, shape=shape, eta=eta, verbose=False,x_T=xT)
+    c = model.get_learned_conditioning([""])
+    samples, intermediates = ddim.sample(steps, conditioning=c,batch_size=bs, shape=shape,log_every_t=10, eta=eta, verbose=False,x_T=xT)
     return samples, intermediates
 
 
@@ -107,16 +108,15 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
                                          make_prog_row=True)
         else:
             print(f"make ddim process")
-            assert exp_config.config.prompt is not None
-            prompts = [exp_config.config.prompt]
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            file_path = "/data/usr/zsc/project/feature_decompose_diffusion/datasets/lsun_bedroom/00000089629ce3ba87bae003073896ba01988dee.jpg"
+            file_path = "/data/zsc/feature_decompose_diffusion/datasets/flowers/2521408074_e6f86daf21_n.jpg"
             assert os.path.isfile(file_path)
             init_image = load_img(file_path).to(device)
             init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))
             ddim_inversion_steps = 999
             sampler = DDIMSampler(model)
-            z_enc, _ = sampler.encode_ddim(init_latent,conditioning=None, num_steps=ddim_inversion_steps)
+            c = model.get_learned_conditioning([""])
+            z_enc, _ = sampler.encode_ddim(init_latent,conditioning=c , unconditional_conditioning=c, num_steps=ddim_inversion_steps)
 
 
             sample, intermediates = convsample_ddim(model,  steps=custom_steps, shape=shape,
@@ -125,10 +125,15 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
         t1 = time.time()
 
     x_sample = model.decode_first_stage(sample)
+    intermediates_imgs = []
+    for x_inter in intermediates['x_inter']:
+        decode_img = model.decode_first_stage(x_inter)
+        intermediates_imgs.append(decode_img)
 
     log["sample"] = x_sample
     log["time"] = t1 - t0
     log['throughput'] = sample.shape[0] / (t1 - t0)
+    log['intermediates'] = intermediates_imgs
     print(f'Throughput for this batch: {log["throughput"]}')
     return log
 
@@ -144,7 +149,6 @@ def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None
     unet_model = model.model.diffusion_model
 
     # path = logdir
-    print(model.cond_stage_model)
     if model.cond_stage_model is not None:
         all_images = []
 
@@ -154,6 +158,7 @@ def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None
                                             vanilla=vanilla, custom_steps=custom_steps,
                                             eta=eta)
         n_saved = save_logs(logs, logdir, n_saved=n_saved, key="sample")
+        save_logs(logs, logdir, n_saved=n_saved, key="intermediates")
         all_images.extend([custom_to_np(logs["sample"])])
         if n_saved >= n_samples:
             print(f'Finish after generating {n_saved} samples')
@@ -176,7 +181,10 @@ def save_logs(logs, path, n_saved=0, key="sample", np_path=None):
             batch = logs[key]
             if np_path is None:
                 for x in batch:
-                    img = custom_to_pil(x)
+                    if x.dim() == 4 :
+                        img = custom_to_pil(x[0])
+                    else :
+                        img = custom_to_pil(x)
                     imgpath = os.path.join(path, f"{key}_{n_saved:06}.png")
                     img.save(imgpath)
                     n_saved += 1

@@ -92,8 +92,7 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
             elif isinstance(layer, SpatialTransformer):
                 x = layer(x,
                           context,
-                          self_attn_q_injected,
-                          self_attn_k_injected)
+                          )
             else:
                 x = layer(x)
         self.stored_output = x
