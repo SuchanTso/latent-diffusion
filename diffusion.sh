@@ -1,1 +1,1 @@
-python recons.py -r /data/usr/zsc/project/feature_decompose_diffusion/latent-diffusion/models/ldm/sdv1.4/model.ckpt -l logdir -n 2 --batch_size 1 -c 50 -e 0
+python3 recons.py -r /data/zsc/feature_decompose_diffusion/latent-diffusion/models/ldm/sdv1.4/model.ckpt -l logdir -n 2 --batch_size 1 -c 50 -e 0
