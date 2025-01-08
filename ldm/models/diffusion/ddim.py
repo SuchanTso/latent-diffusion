@@ -73,6 +73,7 @@ class DDIMSampler(object):
                x_T=None,
                log_every_t=100,
                unconditional_guidance_scale=1.,
+               callback_ddim_timesteps = None,
                unconditional_conditioning=None,
                # this has to come in the same format as the conditioning, # e.g. as encoded tokens, ...
                **kwargs
@@ -104,6 +105,7 @@ class DDIMSampler(object):
                                                     corrector_kwargs=corrector_kwargs,
                                                     x_T=x_T,
                                                     log_every_t=log_every_t,
+                                                    callback_ddim_timesteps=callback_ddim_timesteps,
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
                                                     )
@@ -115,7 +117,7 @@ class DDIMSampler(object):
                       callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
-                      unconditional_guidance_scale=1., unconditional_conditioning=None,):
+                      unconditional_guidance_scale=1., unconditional_conditioning=None,callback_ddim_timesteps=None):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -135,7 +137,10 @@ class DDIMSampler(object):
         print(f"Running DDIM Sampling with {total_steps} timesteps")
 
         iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
-
+        callback_ddim_timesteps_list = np.flip(make_ddim_timesteps("uniform", callback_ddim_timesteps, self.ddpm_num_timesteps))\
+            if callback_ddim_timesteps is not None else np.flip(self.ddim_timesteps)
+        
+        print(f"callback_ddim_timesteps_list = {callback_ddim_timesteps_list}")
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
@@ -152,11 +157,11 @@ class DDIMSampler(object):
                                       unconditional_guidance_scale=unconditional_guidance_scale,
                                       unconditional_conditioning=unconditional_conditioning)
             img, pred_x0 = outs
-            if callback: callback(i)
-            if img_callback: img_callback(pred_x0, i)
+            if step in callback_ddim_timesteps_list:
+                if callback: callback(step)
+                if img_callback: img_callback(i)
 
             if index % log_every_t == 0 or index == total_steps - 1:
-                print(f"log_every_t = {log_every_t} , now index = {index}")
                 intermediates['x_inter'].append(img)
                 intermediates['pred_x0'].append(pred_x0)
 

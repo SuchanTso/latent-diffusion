@@ -1,0 +1,1 @@
+python3 feature_extraction.py -r /data/zsc/feature_decompose_diffusion/latent-diffusion/models/ldm/sdv1.4/model.ckpt -l feature_dir -n 2 --batch_size 1 -c 50 -e 0
