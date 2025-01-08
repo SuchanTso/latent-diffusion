@@ -1,0 +1,9 @@
+config:
+  experiment_name: "flower"
+  block: "output_block_11" # the module name of the visualized features (e.g. "output_block_4", "input_block_7").
+  experiments_fit: # the list of the experiments to visualize the features for
+    - "sdv1.4/samples/00470000/2025-01-08-15-40-43/img"
+  experiments_transform: # the list of the experiments used for calculating the principal components
+    - "sdv1.4/samples/00470000/2025-01-08-15-40-43/img"
+  experiments_info_dir:
+    - "sdv1.4/samples/00470000/2025-01-08-15-40-43"
