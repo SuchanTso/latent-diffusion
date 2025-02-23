@@ -1,2 +1,3 @@
 config:
   exp_path_root: "./feature_dir"
+  visualise_config_file: "./configs/feature_vis/feature-pca-vis.yaml"

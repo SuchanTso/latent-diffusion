@@ -1,0 +1,2 @@
+sh run_feature_extraction.sh
+python run_features_pca.py

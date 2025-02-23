@@ -8,6 +8,7 @@ import json
 from feature_extraction import load_model
 import numpy as np
 from tqdm import tqdm
+import torch.nn.functional as F
 
 from ldm.models.diffusion.ddim import DDIMSampler
 
@@ -20,7 +21,7 @@ def load_experiments_features(feature_maps_paths, block, feature_type, t):
             feature_map_origin = torch.load(att_path)
             feature_map_no_rearrange = feature_map_origin
             feature_map = rearrange(feature_map_no_rearrange, 'h n d -> n (h d)')
-            # print(f"feature_origin.shape = {feature_map_origin.shape} , feature_map_no_rearrange.shape = {feature_map_no_rearrange.shape}\
+            print(f"feature_origin.shape = {feature_map_origin.shape} , feature_map_no_rearrange.shape = {feature_map_no_rearrange.shape}\
                 #    feature_map.shape = {feature_map.shape}")
         else:
             feature_map = \
@@ -66,7 +67,7 @@ def main():
     #     args = json.load(f)
     #     ddim_steps = args["save_feature_timesteps"][-1]
     # load ddim config ,aka time step
-    ddim_config = OmegaConf.load(os.path.join(exp_path_root, exp_info_dir[0], "sampling_config.yaml"))
+    ddim_config = OmegaConf.load(os.path.join(exp_info_dir[0], "sampling_config.yaml"))
     ddim_steps = ddim_config.custom_steps
 
     model_config = OmegaConf.load(f"{opt.model_config}")
@@ -86,17 +87,18 @@ def main():
 
     transform_feature_maps_paths = []
     for experiment in transform_experiments:
-        transform_feature_maps_paths.append(os.path.join(exp_path_root, experiment, "feature_maps"))
+        transform_feature_maps_paths.append(os.path.join(experiment, "feature_maps"))
 
     fit_feature_maps_paths = []
     for experiment in fit_experiments:
-        fit_feature_maps_paths.append(os.path.join(exp_path_root, experiment, "feature_maps"))
+        fit_feature_maps_paths.append(os.path.join(experiment, "feature_maps"))
 
     feature_types = [
-        "in_layers_features",
-        "out_layers_features",
+        # "in_layers_features",
+        # "out_layers_features",
         "self_attn_q",
-        "self_attn_k"
+        "self_attn_k",
+        # "self_attn_v",
     ]
     feature_pca_paths = {}
 

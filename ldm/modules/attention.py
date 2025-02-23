@@ -195,9 +195,9 @@ class CrossAttention(nn.Module):
             sim.masked_fill_(~mask, max_neg_value)
 
         # attention, what we cannot get enough of
-        attn = sim.softmax(dim=-1)
-
-        out = einsum('b i j, b j d -> b i d', attn, v)
+        self.attn = sim.softmax(dim=-1)
+        # print(f"self.attn.shape = {self.attn.shape} , q.shape = {q.shape}, att.mean.shape = {self.attn.mean(dim = 0).shape}")
+        out = einsum('b i j, b j d -> b i d', self.attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         return self.to_out(out)
 

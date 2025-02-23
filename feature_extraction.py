@@ -110,7 +110,7 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
         else:
             print(f"make ddim process")
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            file_path = "/data/zsc/feature_decompose_diffusion/datasets/flowers/2521408074_e6f86daf21_n.jpg"
+            file_path = "/data/zsc/feature_decompose_diffusion/datasets/flowers/00000089629ce3ba87bae003073896ba01988dee.jpg"
             assert os.path.isfile(file_path)
             init_image = load_img(file_path).to(device)
             init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))
@@ -177,6 +177,7 @@ def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None
             if len(block) > 1 and "SpatialTransformer" in str(type(block[1])):
                 save_feature_map(block[1].transformer_blocks[0].attn1.k, f"{feature_type}_{block_idx}_self_attn_k_time_{i}")
                 save_feature_map(block[1].transformer_blocks[0].attn1.q, f"{feature_type}_{block_idx}_self_attn_q_time_{i}")
+                save_feature_map(block[1].transformer_blocks[0].attn1.v, f"{feature_type}_{block_idx}_self_attn_v_time_{i}")
             block_idx += 1
 
     def save_feature_map(feature_map, filename):
@@ -235,17 +236,18 @@ def save_logs(logs, path, n_saved=0, key="sample", np_path=None):
     return n_saved
 
 def block_enumerate(blocks):
-    for block in tqdm(blocks, desc="Saving input blocks feature maps"):
-            if block_idx < 4:
-                block_idx += 1
-                continue
+    block_idx = 0
+    for block in blocks:
+            # if block_idx < 4:
+            #     block_idx += 1
+            #     continue
             if "ResBlock" in str(type(block[0])):
                 if block_idx == 4:
                     print(type(block[0]))
                     # save_feature_map(block[0].in_layers_features, f"{feature_type}_{block_idx}_in_layers_features_time_{i}")
                     # save_feature_map(block[0].out_layers_features, f"{feature_type}_{block_idx}_out_layers_features_time_{i}")
             if len(block) > 1 and "SpatialTransformer" in str(type(block[1])):
-                print(type(block[1]))
+                print(f"block = {block} , block_idx = {block_idx}")
                 # save_feature_map(block[1].transformer_blocks[0].attn1.k, f"{feature_type}_{block_idx}_self_attn_k_time_{i}")
                 # save_feature_map(block[1].transformer_blocks[0].attn1.q, f"{feature_type}_{block_idx}_self_attn_q_time_{i}")
             block_idx += 1
@@ -330,6 +332,24 @@ def load_model(config, ckpt, gpu, eval_mode):
 
     return model, global_step
 
+def modify_visualise_config(change_dir_value = None , unique_experiment_name = None):
+    setup_config = OmegaConf.load("./configs/setup.yaml")
+    visualise_config_file = setup_config.config.visualise_config_file
+    if not os.path.exists(visualise_config_file):
+        raise ValueError("Cannot find {}".format(visualise_config_file))
+    if os.path.isfile(visualise_config_file):
+        img_dir = os.path.join(change_dir_value, "img")
+        visual_config = OmegaConf.load(visualise_config_file)
+        OmegaConf.update(visual_config, "config.experiments_info_dir", [change_dir_value] , merge=False)
+        OmegaConf.update(visual_config, "config.experiments_fit", [img_dir] , merge=False)
+        OmegaConf.update(visual_config, "config.experiments_transform", [img_dir] , merge=False)
+        if unique_experiment_name is not None:
+            experiment_name = visual_config.config.experiment_name
+            parts = experiment_name.split('_', 1)
+            assert len(parts) >= 1
+            OmegaConf.update(visual_config, "config.experiment_name", f"{parts[0]}_{unique_experiment_name}" , merge=False)
+        with open(visualise_config_file, 'w') as f:
+            OmegaConf.save(visual_config, f)
 
 if __name__ == "__main__":
     now = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -400,11 +420,17 @@ if __name__ == "__main__":
     # print(model.model.diffusion_model)
 
     # block_enumerate(model.model.diffusion_model.output_blocks)
+    try:
+        run(model, imglogdir, eta=opt.eta,
+            vanilla=opt.vanilla_sample,  n_samples=opt.n_samples, custom_steps=opt.custom_steps,
+            batch_size=opt.batch_size, nplog=numpylogdir , save_all_features = True)
+        modify_visualise_config(change_dir_value=logdir , unique_experiment_name=now)
 
-    run(model, imglogdir, eta=opt.eta,
-        vanilla=opt.vanilla_sample,  n_samples=opt.n_samples, custom_steps=opt.custom_steps,
-        batch_size=opt.batch_size, nplog=numpylogdir , save_all_features = True)
-
+    except Exception as e:
+        print(e)
+        os.rmdir(imglogdir)
+        os.rmdir(numpylogdir)
+        raise e
     print("done.")
 
 
