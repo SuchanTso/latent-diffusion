@@ -2,13 +2,12 @@ import argparse, os
 from tqdm import trange
 import torch
 from einops import rearrange
-from pnp_utils import visualize_and_save_features_pca
+from pnp_utils import visualize_and_save_features_pca , visualize_and_save_features_dbscan , visualize_and_save_features_kmeans
 from omegaconf import OmegaConf
 import json
 from feature_extraction import load_model
 import numpy as np
 from tqdm import tqdm
-import torch.nn.functional as F
 
 from ldm.models.diffusion.ddim import DDIMSampler
 
@@ -94,11 +93,11 @@ def main():
         fit_feature_maps_paths.append(os.path.join(experiment, "feature_maps"))
 
     feature_types = [
-        "in_layers_features",
-        "out_layers_features",
+        # "in_layers_features",
+        # "out_layers_features",
         "self_attn_q",
         "self_attn_k",
-        # "self_attn_v",
+        "self_attn_v",
     ]
     feature_pca_paths = {}
 
@@ -109,13 +108,12 @@ def main():
         feature_pca_path = os.path.join(pca_folder_path, f"{exp_config.config.block}_{feature_type}")
         feature_pca_paths[feature_type] = feature_pca_path
         os.makedirs(feature_pca_path, exist_ok=True)
-        print(f"make dir {feature_pca_path}")
 
     for t in iterator:
         for feature_type in feature_types:
             fit_features = load_experiments_features(fit_feature_maps_paths, exp_config.config.block, feature_type, t)  # N X C
             transform_features = load_experiments_features(transform_feature_maps_paths, exp_config.config.block, feature_type, t)
-            visualize_and_save_features_pca(torch.cat(fit_features, dim=0),
+            visualize_and_save_features_kmeans(torch.cat(fit_features, dim=0),
                                             torch.cat(transform_features, dim=0),
                                             transform_experiments,
                                             t,

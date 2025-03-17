@@ -171,6 +171,7 @@ class CrossAttention(nn.Module):
         self.q = None
         self.k = None
         self.v = None
+        self.attn_per_head = None
 
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -196,6 +197,12 @@ class CrossAttention(nn.Module):
 
         # attention, what we cannot get enough of
         self.attn = sim.softmax(dim=-1)
+
+        # 拆分多头并保存
+        b = q.shape[0]  # 此时 b = batch * heads
+        attn_per_head = sim.reshape(b // self.heads, self.heads, sim.shape[1], sim.shape[2])
+        self.attn_per_head = attn_per_head
+        # print(f"self.head = {self.heads}")
         # print(f"self.attn.shape = {self.attn.shape} , q.shape = {q.shape}, att.mean.shape = {self.attn.mean(dim = 0).shape}")
         out = einsum('b i j, b j d -> b i d', self.attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)

@@ -86,7 +86,7 @@ def convsample_ddim(model, steps, shape, eta=1.0 , xT = None , call_back=None,
     ddim = DDIMSampler(model)
     bs = shape[0]
     shape = shape[1:]
-    c = model.get_learned_conditioning([""])
+    c = model.get_learned_conditioning([""])# text prompt @suchan
     samples, intermediates = ddim.sample(steps, conditioning=c,batch_size=bs,callback_ddim_timesteps=call_back_timesteps, shape=shape,log_every_t=10, eta=eta, verbose=False,x_T=xT,callback=call_back)
     return samples, intermediates
 
@@ -110,7 +110,7 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
         else:
             print(f"make ddim process")
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            file_path = "/data/zsc/feature_decompose_diffusion/datasets/flowers/00000089629ce3ba87bae003073896ba01988dee.jpg"
+            file_path = "/data/zsc/feature_decompose_diffusion/datasets/flowers/2521408074_e6f86daf21_n.jpg"
             assert os.path.isfile(file_path)
             init_image = load_img(file_path).to(device)
             init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))
@@ -177,7 +177,9 @@ def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None
             if len(block) > 1 and "SpatialTransformer" in str(type(block[1])):
                 save_feature_map(block[1].transformer_blocks[0].attn1.k, f"{feature_type}_{block_idx}_self_attn_k_time_{i}")
                 save_feature_map(block[1].transformer_blocks[0].attn1.q, f"{feature_type}_{block_idx}_self_attn_q_time_{i}")
-                save_feature_map(block[1].transformer_blocks[0].attn1.v, f"{feature_type}_{block_idx}_self_attn_v_time_{i}")
+                save_feature_map(block[1].transformer_blocks[0].attn1.attn_per_head, f"{feature_type}_{block_idx}_self_attn_per_head_time_{i}")
+                save_feature_map(block[1].transformer_blocks[0].attn1.heads, f"{feature_type}_{block_idx}_self_attn_head_time_{i}")
+
             block_idx += 1
 
     def save_feature_map(feature_map, filename):
