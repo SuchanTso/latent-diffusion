@@ -70,7 +70,12 @@ class DDIMSampler(object):
                score_corrector=None,
                corrector_kwargs=None,
                verbose=True,
-               x_T=None,
+                x_T=None,
+                injected_features=None,
+                noise_extract_function=None,
+                noise_extract_time=None,
+                edit_scale = 1.,
+                edit_dir = None,
                log_every_t=100,
                unconditional_guidance_scale=1.,
                callback_ddim_timesteps = None,
@@ -105,6 +110,11 @@ class DDIMSampler(object):
                                                     corrector_kwargs=corrector_kwargs,
                                                     x_T=x_T,
                                                     log_every_t=log_every_t,
+                                                    edit_scale=edit_scale,
+                                                    edit_dir = edit_dir,
+                                                    injected_features=injected_features,
+                                                    noise_extract_time=noise_extract_time,
+                                                    noise_extract_function=noise_extract_function,
                                                     callback_ddim_timesteps=callback_ddim_timesteps,
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
@@ -116,6 +126,10 @@ class DDIMSampler(object):
                       x_T=None, ddim_use_original_steps=False,
                       callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, log_every_t=100,
+                        injected_features=None,
+                        edit_scale = 1.,
+                        edit_dir = None,
+                        noise_extract_function=None, noise_extract_time=None,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None,callback_ddim_timesteps=None):
         device = self.model.betas.device
@@ -150,10 +164,18 @@ class DDIMSampler(object):
                 img_orig = self.model.q_sample(x0, ts)  # TODO: deterministic forward pass?
                 img = img_orig * mask + (1. - mask) * img
 
+            injected_features_i = injected_features[i]\
+                if (injected_features is not None and len(injected_features) > 0) else None
+            adaptive_scale = 1 - ((i) / (total_steps))
+            #note: injected_features_i is a list of features to be injected at timestep i
             outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
                                       corrector_kwargs=corrector_kwargs,
+                                      noise_extract_function=noise_extract_function, noise_extract_time=noise_extract_time,
+                                      injected_features=injected_features_i,
+                                      edit_scale = adaptive_scale,
+                                      edit_dir = edit_dir,
                                       unconditional_guidance_scale=unconditional_guidance_scale,
                                       unconditional_conditioning=unconditional_conditioning)
             img, pred_x0 = outs
@@ -170,22 +192,35 @@ class DDIMSampler(object):
     @torch.no_grad()
     def p_sample_ddim(self, x, c, t, index, repeat_noise=False, use_original_steps=False, quantize_denoised=False,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
+                      injected_features=None,
+                      edit_dir = None,
+                      edit_scale = 1.,
+                      noise_extract_time=None, noise_extract_function=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None):
         b, *_, device = *x.shape, x.device
+        # if injected_features is not None:
+        #     print(f"Injected features in p_sample_ddim")
 
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
-            e_t = self.model.apply_model(x, t, c)
+            e_t = self.model.apply_model(x, t, c , injected_features=injected_features)
         else:
             x_in = torch.cat([x] * 2)
             t_in = torch.cat([t] * 2)
             c_in = torch.cat([unconditional_conditioning, c])
-            e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c_in).chunk(2)
+            e_t_uncond, e_t = self.model.apply_model(x_in, t_in, c_in , injected_features=injected_features).chunk(2)
             e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
 
         if score_corrector is not None:
             assert self.model.parameterization == "eps"
             e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
 
+        if edit_dir is not None:
+            # print(f"edit_dir.range = [{edit_dir.min()} , {edit_dir.max()}] and edit_scale = {edit_scale}")
+            e_t = e_t + edit_dir * edit_scale * 0.2
+        # print(f"noise_extract_time = {noise_extract_time}, noise_extract_function = {noise_extract_function} and t[0] = {t[0]}")
+        if noise_extract_time is not None and noise_extract_function is not None and t[0]==noise_extract_time:
+            # print(f"Extracting noise at timestep {t[0]}")
+            noise_extract_function(e_t)
         alphas = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
         alphas_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev
         sqrt_one_minus_alphas = self.model.sqrt_one_minus_alphas_cumprod if use_original_steps else self.ddim_sqrt_one_minus_alphas

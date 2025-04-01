@@ -173,13 +173,34 @@ class CrossAttention(nn.Module):
         self.v = None
         self.attn_per_head = None
 
-    def forward(self, x, context=None, mask=None):
+    def forward(self, x, context=None, mask=None ,
+                q_injected=None,
+                k_injected=None):
         h = self.heads
 
-        q = self.to_q(x)
+        if q_injected is None:
+            q = self.to_q(x)
+            # q = rearrange(q, 'b n (h d) -> (b h) n d', h=h)
+        else:
+            # print(f"get injected_q in transformer")
+            # b_s = x.shape[0] // 2
+            # q_uncond,q_cond = q_injected.chunk(2)
+            # q = torch.cat([q_uncond]*b_s + [q_cond]*b_s,dim=0)
+            q = q_injected
+            q = rearrange(q, '(b h) n d ->  b n (h d)', h=h)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         context = default(context, x)
+        if k_injected is None:
+            k = self.to_k(context)
+        else:
+            k = k_injected
+            k = rearrange(k, '(b h) n d ->  b n (h d)', h=h)
+
+        v = self.to_v(context).to(device)
         k = self.to_k(context)
-        v = self.to_v(context)
+        q = q.to(device)
+        k = k.to(device)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
@@ -221,11 +242,18 @@ class BasicTransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
         self.checkpoint = checkpoint
 
-    def forward(self, x, context=None):
-        return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
+    def forward(self, x, context=None , self_attn_q_injected=None,
+                self_attn_k_injected=None):
+        # if self_attn_q_injected is not None:
+            # print(f"get injected_q in basic transformer")
+        return checkpoint(self._forward, 
+                          (x, context ,self_attn_q_injected,
+                            self_attn_k_injected), self.parameters(), self.checkpoint)
 
-    def _forward(self, x, context=None):
-        x = self.attn1(self.norm1(x)) + x
+    def _forward(self, x, context=None , self_attn_q_injected=None,
+                self_attn_k_injected=None):
+        x = self.attn1(self.norm1(x) , q_injected=self_attn_q_injected ,
+                       k_injected=self_attn_k_injected) + x
         x = self.attn2(self.norm2(x), context=context) + x
         x = self.ff(self.norm3(x)) + x
         return x
@@ -263,15 +291,21 @@ class SpatialTransformer(nn.Module):
                                               stride=1,
                                               padding=0))
 
-    def forward(self, x, context=None):
+    def forward(self, x, context=None , self_attn_q_injected=None,
+                self_attn_k_injected=None):
         # note: if no context is given, cross-attention defaults to self-attention
         b, c, h, w = x.shape
         x_in = x
         x = self.norm(x)
         x = self.proj_in(x)
         x = rearrange(x, 'b c h w -> b (h w) c')
+        # if self_attn_q_injected is not None:
+            # print(f"get injected_q in spatial transformer")
         for block in self.transformer_blocks:
-            x = block(x, context=context)
+            x = block(x,
+                      context=context,
+                      self_attn_q_injected=self_attn_q_injected,
+                      self_attn_k_injected=self_attn_q_injected)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
         x = self.proj_out(x)
         return x + x_in

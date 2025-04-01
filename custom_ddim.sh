@@ -1,0 +1,5 @@
+MODEL_FLAG="-r /data/zsc/feature_decompose_diffusion/latent-diffusion/models/ldm/sdv1.4/model.ckpt"
+LOG_FLAG="-l ddim_dir"
+IMG_FLAG="--img /data/zsc/feature_decompose_diffusion/datasets/flowers/621741077734_.pic.jpg"
+PROMPT="a bird on the hand"
+python ddim_process.py $MODEL_FLAG $LOG_FLAG -n 1 --batch_size 1 -c 50 -e 0 $IMG_FLAG --inverse_prompt "${PROMPT}"

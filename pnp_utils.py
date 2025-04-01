@@ -52,7 +52,9 @@ def decompose_q_high_var_ica(q , n_components = 3):
     ica = FastICA(n_components=n_components)
     S_ = ica.fit_transform(q.cpu().numpy())  # ICA components
     A_ = ica.mixing_  # estimated mixing matrix
-    return S_ , A_
+    W_ = ica.components_  # estimated unmixing matrix
+    qk = ica.inverse_transform(S_)  # reconstructed signal
+    return S_ , A_ , W_
 
 def visualize_and_save_features_dbscan(feature_maps_fit_data, feature_maps_transform_data, 
                                        transform_experiments, t, save_dir, eps=15.0, min_samples=10):

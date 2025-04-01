@@ -92,6 +92,8 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
             elif isinstance(layer, SpatialTransformer):
                 x = layer(x,
                           context,
+                          self_attn_q_injected=self_attn_q_injected,
+                          self_attn_k_injected=self_attn_k_injected,
                           )
             else:
                 x = layer(x)
@@ -286,13 +288,15 @@ class ResBlock(TimestepBlock):
             h = out_rest(h)
         else:
             if out_layers_injected is not None:
-                out_layers_injected_uncond, out_layers_injected_cond = out_layers_injected.chunk(2)
-                b = x.shape[0] // 2
-                h = th.cat([out_layers_injected_uncond]*b + [out_layers_injected_cond]*b)
+                # out_layers_injected_uncond, out_layers_injected_cond = out_layers_injected.chunk(2)
+                b = x.shape[0]
+                h = th.cat([out_layers_injected]*b)
+                # print(f"out_layers_injected shape: {h.shape} and skip_connection shape: {self.skip_connection(x).shape}")
             else:
                 h = h + emb_out
                 h = self.out_layers(h)
             self.out_layers_features = h
+
         return self.skip_connection(x) + h
 
 
@@ -762,24 +766,35 @@ class UNetModel(nn.Module):
         h = self.middle_block(h, emb, context)
 
         module_i = 0
+
+        device = th.device("cuda" if th.cuda.is_available() else "cpu")
         for module in self.output_blocks:
             self_attn_q_injected = None
             self_attn_k_injected = None
             out_layers_injected = None
             q_feature_key = f'output_block_{module_i}_self_attn_q'
+            recon_feature_key_q = f"recon_block_{module_i}_self_attn_q"
             k_feature_key = f'output_block_{module_i}_self_attn_k'
             out_layers_feature_key = f'output_block_{module_i}_out_layers'
-
+            # if injected_features is not None:
+            #     print(f"injected_features: {injected_features}")
             if injected_features is not None and q_feature_key in injected_features:
                 self_attn_q_injected = injected_features[q_feature_key]
+
+            if injected_features is not None and  recon_feature_key_q in injected_features:
+                
+                # print(f"Using injected features for output block {module_i}")
+                self_attn_q_injected = injected_features[recon_feature_key_q].to(device)
 
             if injected_features is not None and k_feature_key in injected_features:
                 self_attn_k_injected = injected_features[k_feature_key]
 
             if injected_features is not None and out_layers_feature_key in injected_features:
-                out_layers_injected = injected_features[out_layers_feature_key]
+                out_layers_injected = injected_features[out_layers_feature_key].to(device)
 
             h = th.cat([h, hs.pop()], dim=1)
+            # if self_attn_q_injected is not None:
+                # print(f"check in unet : module = {module}")
             h = module(h,
                        emb,
                        context,

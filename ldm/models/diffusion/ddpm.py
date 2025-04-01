@@ -122,6 +122,7 @@ class DDPM(pl.LightningModule):
             betas = make_beta_schedule(beta_schedule, timesteps, linear_start=linear_start, linear_end=linear_end,
                                        cosine_s=cosine_s)
         alphas = 1. - betas
+
         alphas_cumprod = np.cumprod(alphas, axis=0)
         alphas_cumprod_prev = np.append(1., alphas_cumprod[:-1])
 
@@ -888,8 +889,12 @@ class LatentDiffusion(DDPM):
 
         return [rescale_bbox(b) for b in bboxes]
 
-    def apply_model(self, x_noisy, t, cond, return_ids=False):
-
+    def apply_model(self,
+                    x_noisy,
+                    t,
+                    cond,
+                    return_ids=False,
+                    injected_features=None):
         if isinstance(cond, dict):
             # hybrid case, cond is exptected to be a dict
             pass
@@ -972,7 +977,13 @@ class LatentDiffusion(DDPM):
                 cond_list = [cond for i in range(z.shape[-1])]  # Todo make this more efficient
 
             # apply model by loop over crops
-            output_list = [self.model(z_list[i], t, **cond_list[i]) for i in range(z.shape[-1])]
+            if injected_features is not None:
+                print(f"get injected_features in apply_model")
+            output_list = [self.model(z_list[i],
+                                      t,
+                                      **cond_list[i],
+                                      injected_features=injected_features
+                                      ) for i in range(z.shape[-1])]
             assert not isinstance(output_list[0],
                                   tuple)  # todo cant deal with multiple model outputs check this never happens
 
@@ -984,7 +995,11 @@ class LatentDiffusion(DDPM):
             x_recon = fold(o) / normalization
 
         else:
-            x_recon = self.model(x_noisy, t, **cond)
+            x_recon = self.model(x_noisy,
+                                 t,
+                                 **cond,
+                                 injected_features=injected_features
+                                 )
 
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
@@ -1399,22 +1414,41 @@ class DiffusionWrapper(pl.LightningModule):
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
 
-    def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
+    def forward(self,
+                x,
+                t,
+                c_concat: list = None,
+                c_crossattn: list = None,
+                injected_features=None,
+                ):
+        # if injected_features is not None:
+        #     print(f"get injected_features in diffusion wrapper")
         if self.conditioning_key is None:
             out = self.diffusion_model(x, t)
         elif self.conditioning_key == 'concat':
             xc = torch.cat([x] + c_concat, dim=1)
-            out = self.diffusion_model(xc, t)
+            out = self.diffusion_model(xc,
+                                       t,
+                                       injected_features=injected_features)
         elif self.conditioning_key == 'crossattn':
             cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(x, t, context=cc)
+            out = self.diffusion_model(x,
+                                       t,
+                                       context=cc,
+                                       injected_features=injected_features)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
             cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(xc, t, context=cc)
+            out = self.diffusion_model(xc,
+                                       t,
+                                       context=cc,
+                                       injected_features=injected_features)
         elif self.conditioning_key == 'adm':
             cc = c_crossattn[0]
-            out = self.diffusion_model(x, t, y=cc)
+            out = self.diffusion_model(x,
+                                       t,
+                                       y=cc,
+                                       injected_features=injected_features)
         else:
             raise NotImplementedError()
 

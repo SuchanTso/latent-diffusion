@@ -108,8 +108,8 @@ def gram_schmidt_ortho(components):
 #     return kept_comps#gram_schmidt_ortho(kept_comps)
 
 
-def encode_head_data(hid , q , ica_comps , attention_map , masks):
-    head = Attn_head_node(hid , q , ica_comps , attention_map , masks)
+def encode_head_data(hid , q , ica_comps ,ica_matrix , ica_unmix_matrix, attention_map , masks):
+    head = Attn_head_node(hid , q , ica_comps,ica_matrix , ica_unmix_matrix , attention_map , masks)
     head_dict[hid] = head
     return head
     # return {
@@ -348,7 +348,7 @@ def prune_redundant_masks(all_heads, redundant_pairs):
     for head in all_heads:
         hid = head.get_head_id()
         mask_list = head.get_masks()
-        cluster_labels = np.zeros((4096,), dtype=int)
+        cluster_labels = np.zeros((mask_list[0].shape[0],), dtype=int)
         for mid , mask in enumerate(mask_list):
             cluster_id = head.get_mask_cluster_id(mid)
             mask_index = translate_mask_uuid_2_index(mask_index_map , cluster_id)
@@ -378,17 +378,20 @@ def cluster_high_var_q(q , num_components_from_high_var_q ,num_decompose_compone
     head_data_list = []
     cluster_label_list = []
     for i , high_var_q in enumerate(q):
-        S , A = decompose_q_high_var_ica(high_var_q , n_components = num_components_from_high_var_q)
-        # S: [4096 , 5]
-        combined_features = np.concatenate([S, att_matrix_selected[i].cpu()], axis=1)
+        S , A , W = decompose_q_high_var_ica(high_var_q , n_components = num_components_from_high_var_q)
+        # S: [4096 , 5] , A: [40 , 5]
+        # recons_q = S @ A.T # ica extracted n features while the other are ignored so that the recons_q is not equal to high_var_q
+        # print(f"diff when ica:{np.abs(recons_q - high_var_q.cpu().numpy()).mean()}")
+        combined_features = np.concatenate([S, att_matrix_selected[i].cpu()], axis=1)#[4096 , 4101]
+        # att_matrix_selected[i]: [4096 , 4096]
         cluster_label = decompose_spectral(combined_features , n_components = num_decompose_components)
         # 生成区域掩码
         # print(f"cluster_label.shape = {cluster_label.shape}")
         area_masks = [cluster_label == i for i in range(num_decompose_components)]
-        print(f"len(area_masks) = {len(area_masks)} ,  area_masks[0].shape = {area_masks[0].shape}")
+        # print(f"len(area_masks) = {len(area_masks)} ,  area_masks[0].shape = {area_masks[0].shape}")
         cluster_label_list.append(cluster_label)
         # print(f"cluster.max = {cluster_label.max()} , cluster.min = {cluster_label.min()}")
-        head_data_list.append(encode_head_data(i ,high_var_q , S , att_matrix_selected[i] , area_masks))
+        head_data_list.append(encode_head_data(i ,high_var_q , S , A , W , att_matrix_selected[i] , area_masks))
     # pruned_heads = merge_overlap_heads(head_data_list)
     return head_data_list , cluster_label_list
 
@@ -411,50 +414,42 @@ def translate_head_label_new(head_data):
     """
     return head_data.get_cluster_label()
 
-def classify_q_by_mask(q , masks , graph_size = (64,64)):
-    """""
-    根据掩码对Q进行分类
-    参数:
-        q: 单独一个head对应的Q向量 [64, 64, dim]
-        mask: 掩码 [num_head , 4096 , ]
-    """""
-    from collections import defaultdict
-    # 初始化：每个头维护一个Cluster到Q向量的映射
-    cluster_blocks = defaultdict(dict)  # 格式: {head_idx: {cluster_id: q_tensor}}
-
-    num_heads = len(masks)
-    for head_idx in range(num_heads):
-        # 提取当前头的Q和Mask
-        q_head = q[head_idx]  # [64, 64, dim]
-        mask_head = masks[head_idx].reshape(graph_size)  # [64, 64]
-        
-        # 按Cluster收集Q向量
-        clusters = torch.unique(mask_head)
-        head_clusters = {}
-        for cluster_id in clusters:
-            # 获取属于该Cluster的所有位置
-            positions = (mask_head == cluster_id).nonzero(as_tuple=False)  # [num_points, 2]
-            # 提取对应的Q向量
-            q_vectors = q_head[positions[:, 0], positions[:, 1]]  # [num_points, dim]
-            head_clusters[cluster_id.item()] = q_vectors
-        cluster_blocks[head_idx] = head_clusters
-    return cluster_blocks
-
-def replace_cluster_q(q_original, head_idx, cluster_id, new_q, cluster_blocks):
+def modify_data_by_head_data(head_data , data , correlated_index):
     """
-    替换指定头和Cluster的Q向量
-    - q_original: 原始Q张量 [num_heads, H, W, dim]
-    - head_idx: 目标头索引
-    - cluster_id: 目标Cluster ID
-    - new_q: 新的Q向量 [num_points, dim]
-    - cluster_blocks: 分块映射字典
+    根据head_data修改data
+    head_data: head
+    data: [seq_len , dim]
     """
-    q_edited = q_original.clone()
-    # 获取原始Cluster的位置信息
-    original_positions = cluster_blocks[head_idx][cluster_id]["positions"]
-    # 确保新Q向量数量与位置匹配
-    assert len(original_positions) == new_q.shape[0]
-    # 替换Q值
-    for i, (x, y) in enumerate(original_positions):
-        q_edited[head_idx, x, y] = new_q[i]
-    return q_edited
+    un_mix_matrix = head_data.get_ica_unmix_matrix()
+    print(f"un_mix_matrix.shape = {un_mix_matrix.shape} , data.shape = {data.shape}")
+    independent_comp = data.cpu() @ un_mix_matrix.T # [seq_len , n_components]
+    final_comp = head_data.compare_indenpent_comp(independent_comp , correlated_index)
+    recon_data = final_comp @ head_data.get_ica_matrix().T
+    return recon_data
+
+
+def edit_head_data(head_list , data , mask_id):
+    """
+    根据mask_id编辑head_data
+    head_list:[head1 , head2 , ...]
+    data: [head_num , seq_len , dim]
+    mask_id: int 
+    """
+    for i , head in enumerate(head_list):
+        found_flag = False
+        correlated_index = head.find_independent_comp_by_mask_id(mask_id)
+        res = torch.zeros(data.shape)
+        head_id = head.get_head_id()
+        if correlated_index != -1:
+            found_flag = True
+            assert head_id >= 0 and head_id < data.shape[0]
+            data_head_id = torch.tensor(modify_data_by_head_data(head , data[head_id] , correlated_index))
+            diff_head = data[head_id].cpu() - data_head_id
+            print(f"diff_head.range =[{diff_head.min()} , {diff_head.max()}] , set {head_id} data")
+            res[head_id] = data_head_id
+        else:
+            res[head_id] = data[head_id]
+    if not found_flag:
+        print(f"mask_id:{mask_id} not found in any head")
+    return res
+    
