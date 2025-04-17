@@ -11,6 +11,7 @@ from torchvision import transforms
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.util import instantiate_from_config
 import tqdm
+import re
 
 rescale = lambda x: (x + 1.) / 2.
 
@@ -92,7 +93,7 @@ def convsample_ddim(model, steps, shape, eta=1.0 , xT = None , call_back=None,
 
 
 @torch.no_grad()
-def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=None, eta=1.0,call_back = None , call_back_timesteps = None):
+def make_convolutional_sample(model, batch_size,file_path, vanilla=False, custom_steps=None, eta=1.0,call_back = None , call_back_timesteps = None , start_pt_path = None):
 
 
     log = dict()
@@ -110,8 +111,8 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
         else:
             print(f"make ddim process")
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            file_path = "/data/zsc/feature_decompose_diffusion/datasets/flowers/2521408074_e6f86daf21_n.jpg"
-            assert os.path.isfile(file_path)
+            # file_path = "/data/zsc/feature_decompose_diffusion/datasets/flowers/2521408074_e6f86daf21_n.jpg"
+            assert os.path.isfile(file_path), f"cannot find {file_path}"
             init_image = load_img(file_path).to(device)
             init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))
             ddim_inversion_steps = 999
@@ -119,7 +120,9 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
             c = model.get_learned_conditioning([""])
             z_enc, _ = sampler.encode_ddim(init_latent,conditioning=c , unconditional_conditioning=c, num_steps=ddim_inversion_steps)
 
-
+            if start_pt_path is not None and os.path.exists(start_pt_path):
+                start_code = os.path.join(start_pt_path , "start_pt.pt")
+                torch.save(z_enc , start_code)
             sample, intermediates = convsample_ddim(model,  steps=custom_steps, shape=shape,
                                                     eta=eta , xT=z_enc , call_back=call_back , call_back_timesteps = call_back_timesteps)
 
@@ -140,7 +143,7 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
 
 
 
-def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None, n_samples=50000, nplog=None , save_all_features = False):
+def run(model, logdir,file_path, extract_start_point ,batch_size=50, vanilla=False, custom_steps=None, eta=None, n_samples=50000, nplog=None , save_all_features = False):
     if vanilla:
         print(f'Using Vanilla DDPM sampling with {model.num_timesteps} sampling steps.')
     else:
@@ -157,6 +160,9 @@ def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None
 
 
     def ddim_sampler_callback(i):
+        # print(f"ddim_sampler_callback i = {i} , extract_start_point = {extract_start_point}")
+        if i > extract_start_point:
+            return
         save_feature_maps_callback(i)
 
     def save_feature_maps_callback(i):
@@ -167,15 +173,15 @@ def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None
     def save_feature_maps(blocks, i, feature_type="input_block"):
         block_idx = 0
         for block in blocks:
-            if not save_all_features and block_idx < 4:
+            if not save_all_features and block_idx < 8:
                 block_idx += 1
                 continue
-            if "ResBlock" in str(type(block[0])):
-                if save_all_features or block_idx == 4:
-                    save_feature_map(block[0].in_layers_features, f"{feature_type}_{block_idx}_in_layers_features_time_{i}")
-                    save_feature_map(block[0].out_layers_features, f"{feature_type}_{block_idx}_out_layers_features_time_{i}")
+            # if "ResBlock" in str(type(block[0])):
+            #     if save_all_features or block_idx == 4:
+            #         save_feature_map(block[0].in_layers_features, f"{feature_type}_{block_idx}_in_layers_features_time_{i}")
+            #         save_feature_map(block[0].out_layers_features, f"{feature_type}_{block_idx}_out_layers_features_time_{i}")
             if len(block) > 1 and "SpatialTransformer" in str(type(block[1])):
-                save_feature_map(block[1].transformer_blocks[0].attn1.k, f"{feature_type}_{block_idx}_self_attn_k_time_{i}")
+                # save_feature_map(block[1].transformer_blocks[0].attn1.k, f"{feature_type}_{block_idx}_self_attn_k_time_{i}")
                 save_feature_map(block[1].transformer_blocks[0].attn1.q, f"{feature_type}_{block_idx}_self_attn_q_time_{i}")
                 save_feature_map(block[1].transformer_blocks[0].attn1.attn_per_head, f"{feature_type}_{block_idx}_self_attn_per_head_time_{i}")
                 save_feature_map(block[1].transformer_blocks[0].attn1.heads, f"{feature_type}_{block_idx}_self_attn_head_time_{i}")
@@ -195,11 +201,13 @@ def run(model, logdir, batch_size=50, vanilla=False, custom_steps=None, eta=None
         logs = make_convolutional_sample(model, batch_size=batch_size,
                                             vanilla=vanilla, custom_steps=custom_steps,
                                             eta=eta,
+                                            file_path=file_path,
                                             call_back=ddim_sampler_callback,
-                                            call_back_timesteps = callback_timesteps_to_save
+                                            call_back_timesteps = callback_timesteps_to_save,
+                                            start_pt_path=logdir
                                             )
         n_saved = save_logs(logs, logdir, n_saved=n_saved, key="sample")
-        save_logs(logs, logdir, n_saved=n_saved, key="intermediates")
+        # save_logs(logs, logdir, n_saved=n_saved, key="intermediates")
         all_images.extend([custom_to_np(logs["sample"])])
         if n_saved >= n_samples:
             print(f'Finish after generating {n_saved} samples')
@@ -310,6 +318,28 @@ def get_parser():
         help="the bs",
         default=10
     )
+    parser.add_argument(
+        "-d",
+        "--dataset",
+        type=str,
+        nargs="?",
+        help="dataset dir to extract features",
+        default="/data/zsc/feature_decompose_diffusion/datasets/unlabeled2017"
+    )
+    parser.add_argument(
+        "--ratio",
+        type=float,
+        nargs="?",
+        help="time step ratio for when to save the feature maps . set 1.0 as the full sampling steps aka T , while 0.0 as the final sampling step , aka 0",
+        default=0.02
+    )
+    parser.add_argument(
+        "--registry",
+        type=str,
+        nargs="?",
+        help="path to registry file",
+        default="/data/zsc/feature_decompose_diffusion/latent-diffusion/configs/ddim_edit/experiment_registry.yaml"
+    )
     return parser
 
 
@@ -334,24 +364,70 @@ def load_model(config, ckpt, gpu, eval_mode):
 
     return model, global_step
 
-def modify_visualise_config(change_dir_value = None , unique_experiment_name = None):
-    setup_config = OmegaConf.load("./configs/setup.yaml")
-    visualise_config_file = setup_config.config.visualise_config_file
+def modify_visualise_config(change_dir_value = None , unique_experiment_name = None , config_path = None):
+    # setup_config = OmegaConf.load("./configs/setup.yaml")
+    visualise_config_file = config_path
     if not os.path.exists(visualise_config_file):
-        raise ValueError("Cannot find {}".format(visualise_config_file))
-    if os.path.isfile(visualise_config_file):
-        img_dir = os.path.join(change_dir_value, "img")
-        visual_config = OmegaConf.load(visualise_config_file)
-        OmegaConf.update(visual_config, "config.experiments_info_dir", [change_dir_value] , merge=False)
-        OmegaConf.update(visual_config, "config.experiments_fit", [img_dir] , merge=False)
-        OmegaConf.update(visual_config, "config.experiments_transform", [img_dir] , merge=False)
-        if unique_experiment_name is not None:
-            experiment_name = visual_config.config.experiment_name
-            parts = experiment_name.split('_', 1)
-            assert len(parts) >= 1
-            OmegaConf.update(visual_config, "config.experiment_name", f"{parts[0]}_{unique_experiment_name}" , merge=False)
+        # 创建默认的视觉化配置内容
+        default_visual_config = {
+            "config": {
+                "experiments_info_dir": [],
+                "experiments_fit": [],
+                "experiments_transform": [],
+                "experiment_name": "default_experiment",
+                "block": "output_block_11"
+            }
+        }
+        # 确保目标目录存在
+        os.makedirs(os.path.dirname(visualise_config_file), exist_ok=True)
+        # 写入默认配置
         with open(visualise_config_file, 'w') as f:
-            OmegaConf.save(visual_config, f)
+            OmegaConf.save(config=OmegaConf.create(default_visual_config), f=f)
+        # raise ValueError("Cannot find {}".format(visualise_config_file))
+
+    assert os.path.isfile(visualise_config_file) , f"{visualise_config_file} is not a file"
+    img_dir = os.path.join(change_dir_value, "img")
+    visual_config = OmegaConf.load(visualise_config_file)
+    OmegaConf.update(visual_config, "config.experiments_info_dir", [change_dir_value] , merge=False)
+    OmegaConf.update(visual_config, "config.experiments_fit", [img_dir] , merge=False)
+    OmegaConf.update(visual_config, "config.experiments_transform", [img_dir] , merge=False)
+    OmegaConf.update(visual_config, "config.block", "output_block_9" , merge=False)
+
+    if unique_experiment_name is not None:
+        OmegaConf.update(visual_config, "config.experiment_name", f"{unique_experiment_name}" , merge=False)
+    with open(visualise_config_file, 'w') as f:
+        OmegaConf.save(visual_config, f)
+
+def extract_file_name(file_path):
+    # 使用正则表达式匹配路径中的哈希值，不依赖于特定的长度和文件扩展名
+    match = re.search(r'/([^/]+?)(\.[^/]+)?$', file_path)
+    if match:
+        return match.group(1)
+    else:
+        return None
+    
+def load_count(registry_path):
+    assert os.path.isfile(registry_path), f"{registry_path} is not a file"
+    # 使用 OmegaConf 加载配置文件
+    config = OmegaConf.load(registry_path)
+    # 检查是否存在 "feature_count" 字段
+    if "feature_count" in config:
+        return config["feature_count"]
+    else:
+        return 0
+    
+def save_registry_count(registry_path , count):
+    if not os.path.isfile(registry_path):
+        config = OmegaConf.create()  # 创建一个空的 OmegaConf 对象
+    else:
+        config = OmegaConf.load(registry_path)  # 加载现有的配置文件
+
+    # 将 count 值保存到 "feature_count" 字段
+    config["feature_count"] = count
+
+    # 将更新后的配置写回到 registry_path 文件中
+    with open(registry_path, "w") as file:
+        OmegaConf.save(config=config, f=file)
 
 if __name__ == "__main__":
     now = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -397,42 +473,60 @@ if __name__ == "__main__":
         logdir = os.path.join(opt.logdir, locallog)
 
     print(config)
-
     model, global_step = load_model(config, ckpt, gpu, eval_mode)
     print(f"global step: {global_step}")
-    print(75 * "=")
-    print("logging to:")
-    logdir = os.path.join(logdir, "samples", f"{global_step:08}", now)
-    imglogdir = os.path.join(logdir, "img")
-    numpylogdir = os.path.join(logdir, "numpy")
+    print(f"run feature extraction in dataset : {opt.dataset}")
+    rec_logdir = logdir
+    for _, dirs, files in os.walk(opt.dataset):
+        for i, file in enumerate(sorted(files)):
+            feature_count = load_count(opt.registry)
+            if i < feature_count:
+                continue
+            logdir = rec_logdir
+            # file_path = os.path.join(opt.dataset, file)
+            print(75 * "=")
+            print("logging to:")
+            print(f"file = {file}")
+            full_path = os.path.join(opt.dataset, file)
+            file_name = extract_file_name(full_path)
+            assert file_name is not None, f"Cannot find the hash value in {full_path}"
+            logdir = os.path.join(logdir, "samples", f"{global_step:08}", file_name)
+            imglogdir = os.path.join(logdir, "img")
+            numpylogdir = os.path.join(logdir, "numpy")
 
-    os.makedirs(imglogdir)
-    os.makedirs(numpylogdir)
-    print(logdir)
-    print(75 * "=")
+            os.makedirs(imglogdir,exist_ok=True)
+            os.makedirs(numpylogdir,exist_ok=True)
+            print(logdir)
+            print(75 * "=")
 
-    # write config out
-    sampling_file = os.path.join(logdir, "sampling_config.yaml")
-    sampling_conf = vars(opt)
+            # write config out
+            sampling_file = os.path.join(logdir, "sampling_config.yaml")
+            sampling_conf = vars(opt)
+            mask_gen_config_path = os.path.join(logdir, "mask_config.yaml")
 
-    with open(sampling_file, 'w') as f:
-        yaml.dump(sampling_conf, f, default_flow_style=False)
-    print(sampling_conf)
+            with open(sampling_file, 'w') as f:
+                yaml.dump(sampling_conf, f, default_flow_style=False)
+            print(sampling_conf)
 
-    # print(model.model.diffusion_model)
+            # print(model.model.diffusion_model)
+            ddim_inversion_steps = 999
+            # block_enumerate(model.model.diffusion_model.output_blocks)
+            extract_start_point = ddim_inversion_steps * opt.ratio 
+            try:
+                run(model, imglogdir, eta=opt.eta,
+                    file_path=full_path,
+                    extract_start_point=extract_start_point,
+                    vanilla=opt.vanilla_sample,  n_samples=opt.n_samples, custom_steps=opt.custom_steps,
+                    batch_size=opt.batch_size, nplog=numpylogdir , save_all_features = False)
+                modify_visualise_config(change_dir_value=logdir , unique_experiment_name=file_name , config_path=mask_gen_config_path)
+                save_registry_count(opt.registry, feature_count + 1)
+                #TODO: make a registry list for every expriment
 
-    # block_enumerate(model.model.diffusion_model.output_blocks)
-    try:
-        run(model, imglogdir, eta=opt.eta,
-            vanilla=opt.vanilla_sample,  n_samples=opt.n_samples, custom_steps=opt.custom_steps,
-            batch_size=opt.batch_size, nplog=numpylogdir , save_all_features = True)
-        modify_visualise_config(change_dir_value=logdir , unique_experiment_name=now)
-
-    except Exception as e:
-        print(e)
-        os.rmdir(imglogdir)
-        os.rmdir(numpylogdir)
-        raise e
+            except Exception as e:
+                print(e)
+                os.rmdir(imglogdir)
+                os.rmdir(numpylogdir)
+                raise e
     print("done.")
 
 

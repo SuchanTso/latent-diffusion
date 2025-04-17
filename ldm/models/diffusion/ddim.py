@@ -69,6 +69,7 @@ class DDIMSampler(object):
                noise_dropout=0.,
                score_corrector=None,
                corrector_kwargs=None,
+               blend_callback=None,
                verbose=True,
                 x_T=None,
                 injected_features=None,
@@ -109,6 +110,7 @@ class DDIMSampler(object):
                                                     score_corrector=score_corrector,
                                                     corrector_kwargs=corrector_kwargs,
                                                     x_T=x_T,
+                                                    blend_callback=blend_callback,
                                                     log_every_t=log_every_t,
                                                     edit_scale=edit_scale,
                                                     edit_dir = edit_dir,
@@ -129,6 +131,7 @@ class DDIMSampler(object):
                         injected_features=None,
                         edit_scale = 1.,
                         edit_dir = None,
+                        blend_callback=None,
                         noise_extract_function=None, noise_extract_time=None,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
                       unconditional_guidance_scale=1., unconditional_conditioning=None,callback_ddim_timesteps=None):
@@ -155,6 +158,7 @@ class DDIMSampler(object):
             if callback_ddim_timesteps is not None else np.flip(self.ddim_timesteps)
         
         print(f"callback_ddim_timesteps_list = {callback_ddim_timesteps_list}")
+        intermediates.update({'time_range': callback_ddim_timesteps_list})
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
@@ -168,6 +172,8 @@ class DDIMSampler(object):
                 if (injected_features is not None and len(injected_features) > 0) else None
             adaptive_scale = 1 - ((i) / (total_steps))
             #note: injected_features_i is a list of features to be injected at timestep i
+            if blend_callback is not None:
+                img = blend_callback(img, i)
             outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
@@ -183,7 +189,7 @@ class DDIMSampler(object):
                 if callback: callback(step)
                 if img_callback: img_callback(i)
 
-            if index % log_every_t == 0 or index == total_steps - 1:
+            if index % log_every_t == 0:
                 intermediates['x_inter'].append(img)
                 intermediates['pred_x0'].append(pred_x0)
 

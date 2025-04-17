@@ -62,6 +62,29 @@ def spatial_variance_filter(q):
     mask = variances > torch.median(variances)
     return q[mask], mask.nonzero().flatten().tolist()
 
+def process_masks(all_head):
+    # 获取序列长度
+    seq_len = len(translate_head_label_new(all_head[0]))
+    
+    # 初始化结果列表
+    result = []
+    
+    # 遍历 i 从 1 到 10
+    for i in range(1, 11):
+        # 创建一个全零数组，形状为 (seq_len,)
+        mask_i = np.zeros(seq_len, dtype=int)
+        
+        # 遍历每个 mask，检查是否在该位置等于 i
+        for head in all_head:
+            mask = translate_head_label_new(head)
+            # 如果当前位置等于 i，则设置为 1
+            mask_i = np.where(mask == i, 1, mask_i)
+        
+        # 将生成的 mask 添加到结果中
+        result.append(mask_i)
+    
+    return result
+
 
 def visualise_cluster_masks(clusters , pruned_heads , save_dir , t , grid_size = (64 , 64) , fig_size = (12 , 6)):
 
@@ -82,26 +105,41 @@ def visualise_cluster_masks(clusters , pruned_heads , save_dir , t , grid_size =
     custom_cmap = ListedColormap(colors)
     
     # 可视化2：聚类热力图
-    line , row = 1 , 8
+    line , row = 2 , 5
 
+    # fig, axes = plt.subplots(line * 2, row, figsize=fig_size)
     global_min = 0
-    fig, axes = plt.subplots(line * 2, row, figsize=fig_size)
-    for i , cluster in enumerate(clusters):
-        h = w = int(math.sqrt(cluster.shape[0]))
-        cluster_map = cluster.reshape(h, w).astype(float)
-        axes[int(i / row)][int(i % row)].imshow(cluster_map, cmap=custom_cmap, vmin=global_min , vmax=global_min+15)  # 使用离散颜色映射
-        axes[int(i / row)][int(i % row)].set_title(f"OHead_{i}")
-        axes[int(i / row)][int(i % row)].axis('off')
+    # for i , cluster in enumerate(clusters):
+    #     h = w = int(math.sqrt(cluster.shape[0]))
+    #     cluster_map = cluster.reshape(h, w).astype(float)
+    #     axes[int(i / row)][int(i % row)].imshow(cluster_map, cmap=custom_cmap, vmin=global_min , vmax=global_min+15)  # 使用离散颜色映射
+    #     axes[int(i / row)][int(i % row)].set_title(f"OHead_{i}")
+    #     axes[int(i / row)][int(i % row)].axis('off')
 
-    for i , head in enumerate(pruned_heads):
-        cluster = translate_head_label_new(head)
-        cluster_map = cluster.reshape(h, w).astype(float)
-        assert cluster.min() > 0
-        print(f"cluster_{i}.min = {cluster.min()} , cluster_{i}.max = {cluster.max()} , cluster_{i}.mask_len = {len(head.get_masks())}")
-        index = i + len(clusters)
+    
+
+    # for i , head in enumerate(pruned_heads):
+    #     cluster = translate_head_label_new(head)
+    #     cluster_map = cluster.reshape(h, w).astype(float)
+    #     assert cluster.min() > 0
+    #     print(f"cluster_{i}.min = {cluster.min()} , cluster_{i}.max = {cluster.max()} , cluster_{i}.mask_len = {len(head.get_masks())}")
+    #     index = i + len(clusters)
+    #     im = axes[int(index / row)][int(index % row)].imshow(cluster_map, cmap=custom_cmap , vmin=global_min , vmax=global_min+15)  # 使用离散颜色映射
+    #     # plt.colorbar(im , ticks=np.arange(16), label='Cluster ID')
+    #     axes[int(index / row)][int(index % row)].set_title(f"Head_{i}")
+    #     axes[int(index / row)][int(index % row)].axis('off')
+
+    fig, axes = plt.subplots(line, row, figsize=fig_size)
+    unique_masks = process_masks(pruned_heads)
+    assert len(unique_masks) == 10
+    for i ,mask in enumerate(unique_masks):
+        cluster_map = mask.reshape(h, w).astype(float)
+        # assert cluster.min() > 0
+        # print(f"cluster_{i}.min = {cluster.min()} , cluster_{i}.max = {cluster.max()} , cluster_{i}.mask_len = {len(head.get_masks())}")
+        index = i
         im = axes[int(index / row)][int(index % row)].imshow(cluster_map, cmap=custom_cmap , vmin=global_min , vmax=global_min+15)  # 使用离散颜色映射
         # plt.colorbar(im , ticks=np.arange(16), label='Cluster ID')
-        axes[int(index / row)][int(index % row)].set_title(f"Head_{i}")
+        axes[int(index / row)][int(index % row)].set_title(f"mask_{i+1}")
         axes[int(index / row)][int(index % row)].axis('off')
     
     plt.tight_layout()
@@ -160,15 +198,33 @@ def gen_corred_comps(mask_id , head_list):
             head.reconstruct_data(head.get_ica_comp().T)
     return comp_dict
 
+def save_masks(path , heads):
+    os.makedirs(path, exist_ok=True)
+    for i , head in enumerate(heads):
+        file_path = os.path.join(path , f"mask_head_{i}.pt")
+        cluster = translate_head_label_new(head)
+        torch.save(cluster , file_path)
+    print(f"done save all masks to {path}")
+
+def gen_mask_flags(config , config_path):
+    OmegaConf.update(config , "compute_mask" , True)
+    OmegaConf.update(config , "masks" , [1])
+    OmegaConf.update(config , "prompt" , "")
+
+    with open(config_path , "w") as f:
+        OmegaConf.save(config , f)
+
+
+
 def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--config",
+        "--feature_dir",
         type=str,
         nargs="?",
-        default="configs/feature_vis/feature-pca-vis.yaml",
-        help="path to the feature PCA visualization config file"
+        default="/data/zsc/feature_decompose_diffusion/latent-diffusion/feature_dir/sdv1.4/samples/00470000",
+        help="path to feature maps , where settles the feature config"
     )
     parser.add_argument(
         "--model_config",
@@ -182,84 +238,91 @@ def main():
         default="models/ldm/sdv1.4/model.ckpt",
         help="path to checkpoint of model",
     )
+    parser.add_argument(
+        "--mask_time",
+        type=int,
+        default=1,
+        help="time to save mask",
+    )
 
     opt = parser.parse_args()
-    setup_config = OmegaConf.load("./configs/setup.yaml")
-    exp_path_root = setup_config.config.exp_path_root
-    exp_config = OmegaConf.load(f"{opt.config}")
-    transform_experiments = exp_config.config.experiments_transform
-    fit_experiments = exp_config.config.experiments_fit
-    exp_info_dir = exp_config.config.experiments_info_dir
-
-    # with open(os.path.join(exp_path_root, transform_experiments[0], "args.json"), "r") as f:
-    #     args = json.load(f)
-    #     ddim_steps = args["save_feature_timesteps"][-1]
-    # load ddim config ,aka time step
-    ddim_config = OmegaConf.load(os.path.join(exp_info_dir[0], "sampling_config.yaml"))
-    ddim_steps = ddim_config.custom_steps
-
     model_config = OmegaConf.load(f"{opt.model_config}")
     model, _ = load_model(model_config, opt.ckpt, True, True)
-
-
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device)
     sampler = DDIMSampler(model)
-    sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=0, verbose=False)
-    time_range = np.flip(sampler.ddim_timesteps)
-    print(f"put ddim_step = {ddim_steps} and get sampler.ddim_step = {sampler.ddim_timesteps}")
-    total_steps = sampler.ddim_timesteps.shape[0]
-    iterator = tqdm(time_range, desc="visualizing features", total=total_steps)
-
-    print(f"visualizing features PCA experiments: block - {exp_config.config.block}; transform experiments - {exp_config.config.experiments_transform}; fit experiments - {exp_config.config.experiments_fit}")
-
-    transform_feature_maps_paths = []
-    for experiment in transform_experiments:
-        transform_feature_maps_paths.append(os.path.join(experiment, "feature_maps"))
-
-    fit_feature_maps_paths = []
-    for experiment in fit_experiments:
-        fit_feature_maps_paths.append(os.path.join(experiment, "feature_maps"))
-
-    feature_types = [
-        # "in_layers_features",
-        # "out_layers_features",
-        "self_attn_q",
-        # "self_attn_k",
-        # "self_attn_v",
-    ]
-    feature_pca_paths = {}
-
-    pca_folder_path = os.path.join(exp_path_root, "PCA_features_vis", exp_config.config.experiment_name)
-    os.makedirs(pca_folder_path, exist_ok=True)
-
-    for feature_type in feature_types:
-        feature_pca_path = os.path.join(pca_folder_path, f"{exp_config.config.block}_{feature_type}")
-        feature_pca_paths[feature_type] = feature_pca_path
-        os.makedirs(feature_pca_path, exist_ok=True)
-
     num_components_from_high_var_q = 10 # decompose 5 main components from high variance q
     num_decompose_components = 5 # decompose 3 main components from each components of high variance q
-    for t in iterator:
-        if t >= 200:
-            continue
-        for feature_type in feature_types:
-            fit_features , fit_origin = load_experiments_features(fit_feature_maps_paths, exp_config.config.block, feature_type, t)  # N X C
-            # haed_features = load_experiments_heads(fit_feature_maps_paths, exp_config.config.block, feature_type, t)
-            masked_q , mask = spatial_variance_filter(torch.cat(fit_origin , dim = 0))
-            att_matrix = load_experiments_att_matrix(fit_feature_maps_paths, exp_config.config.block, feature_type, t)
-            att_matrix_tensor = torch.cat(att_matrix , dim = 0)
-            # att_matrix_selected = att_matrix_tensor[0][mask]
-            att_matrix_selected = att_matrix_tensor[0]
-            print(f"att_matrix_selected.shape = {att_matrix_selected.shape}")
-            # print(f"fit_features_origin.shape = {torch.cat(fit_origin , dim = 0).shape}")
-            # print(f"masked_q.shape = {masked_q.shape}")
-            all_head = cluster_merge_heads(torch.cat(fit_origin , dim = 0) , num_components_from_high_var_q , num_decompose_components , att_matrix_selected , feature_pca_paths[feature_type] , t)
-                # cluster_masks[head_key] = masks
-            # merge_feat = auto_ortho_merge(componets_dic, mask_dic)
-            # print(f"merge_feat[0].shape = {merge_feat[0].shape}")
-            correlated_index = gen_corred_comps(mask_id=5 , head_list = all_head)
 
+    feature_types = [
+                    # "in_layers_features",
+                    # "out_layers_features",
+                    "self_attn_q",
+                    # "self_attn_k",
+                    # "self_attn_v",
+                ]
+    setup_config = OmegaConf.load("./configs/setup.yaml")
+
+
+    for root , dirs , files in os.walk(opt.feature_dir):
+        for dir in sorted(dirs):
+            mask_config = os.path.join(root , dir , "mask_config.yaml")
+            if os.path.exists(mask_config):
+
+                exp_path_root = os.path.join(root , dir)#setup_config.config.exp_path_root#featire_dir
+                exp_config = OmegaConf.load(mask_config)
+                transform_experiments = exp_config.config.experiments_transform
+                fit_experiments = exp_config.config.experiments_fit
+                exp_info_dir = exp_config.config.experiments_info_dir
+                ddim_config = OmegaConf.load(os.path.join(exp_info_dir[0], "sampling_config.yaml"))
+                ddim_steps = ddim_config.custom_steps
+                if 'compute_mask' in exp_config and exp_config.compute_mask:
+                    continue
+
+                
+                sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=0, verbose=False)
+                time_range = np.flip(sampler.ddim_timesteps)
+                print(f"put ddim_step = {ddim_steps} and get sampler.ddim_step = {sampler.ddim_timesteps}")
+                total_steps = sampler.ddim_timesteps.shape[0]
+                iterator = tqdm(time_range, desc="visualizing features", total=total_steps)
+
+                # print(f"visualizing features PCA experiments: block - {exp_config.config.block}; transform experiments - {exp_config.config.experiments_transform}; fit experiments - {exp_config.config.experiments_fit}")
+
+                transform_feature_maps_paths = []
+                for experiment in transform_experiments:
+                    transform_feature_maps_paths.append(os.path.join(experiment, "feature_maps"))
+
+                fit_feature_maps_paths = []
+                for experiment in fit_experiments:
+                    fit_feature_maps_paths.append(os.path.join(experiment, "feature_maps"))
+
+                
+                # feature_pca_paths = {}
+
+                # pca_folder_path = os.path.join(exp_path_root, "PCA_features_vis", exp_config.config.experiment_name)
+                # os.makedirs(pca_folder_path, exist_ok=True)
+
+                # for feature_type in feature_types:
+                #     feature_pca_path = os.path.join(exp_path_root, f"{exp_config.config.block}_{feature_type}")
+                #     feature_pca_paths[feature_type] = feature_pca_path
+                #     os.makedirs(feature_pca_path, exist_ok=True)
+
+                for t in iterator:
+                    if t != opt.mask_time:
+                        continue
+                    for feature_type in feature_types:
+                        mask_path = os.path.join(exp_path_root , f"mask_{opt.mask_time}")
+                        fit_features , fit_origin = load_experiments_features(fit_feature_maps_paths, exp_config.config.block, feature_type, t)  # N X C
+                        att_matrix = load_experiments_att_matrix(fit_feature_maps_paths, exp_config.config.block, feature_type, t)
+                        att_matrix_tensor = torch.cat(att_matrix , dim = 0)
+                        att_matrix_selected = att_matrix_tensor[0]
+                        all_head = cluster_merge_heads(torch.cat(fit_origin , dim = 0) , num_components_from_high_var_q , num_decompose_components , att_matrix_selected , exp_path_root , t)
+                        save_masks(mask_path , all_head)
+                        gen_mask_flags(exp_config , mask_config)
+
+            else:
+                print(f"no mask_config.yaml in {dir} , skip this dir")
+                continue
 
 if __name__ == "__main__":
     main()
