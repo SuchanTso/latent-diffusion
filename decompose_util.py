@@ -6,7 +6,6 @@ from torchvision import transforms as T
 from math import sqrt
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from transformers import AutoFeatureExtractor
-from PIL import Image
 import torch
 import torch.nn.functional as F
 import itertools
@@ -382,7 +381,7 @@ def cluster_high_var_q(q , num_components_from_high_var_q ,num_decompose_compone
         # S: [4096 , 5] , A: [40 , 5]
         # recons_q = S @ A.T # ica extracted n features while the other are ignored so that the recons_q is not equal to high_var_q
         # print(f"diff when ica:{np.abs(recons_q - high_var_q.cpu().numpy()).mean()}")
-        combined_features = np.concatenate([S, att_matrix_selected[i].cpu()], axis=1)#[4096 , 4101]
+        combined_features = att_matrix_selected[i].cpu()#np.concatenate([S, att_matrix_selected[i].cpu()], axis=1)#[4096 , 4101]
         # att_matrix_selected[i]: [4096 , 4096]
         cluster_label = decompose_spectral(combined_features , n_components = num_decompose_components)
         # 生成区域掩码
